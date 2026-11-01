@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ドミノは1.5倍</title>
+<meta name="description" content="ドミノは自分の約1.5倍の大きさのドミノまで倒せる。5mmのドミノから30枚で、どこまで大きなものを倒せるか。">
+<style>
+:root { --bg: #f3f0ea; --surface: #fff; --fg: #1f1d1a; --muted: #6c675f; --line: #dcd6cc; --accent: #2a5bd7; --accent-fg: #fff; --warn: #c8322b; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #141312; --surface: #1f1d1b; --fg: #efebe4; --muted: #a8a197; --line: #34312d; --accent: #7aa2ff; --accent-fg: #141312; --warn: #ff7a70; color-scheme: dark; } }
+:root[data-theme="dark"] { --bg: #141312; --surface: #1f1d1b; --fg: #efebe4; --muted: #a8a197; --line: #34312d; --accent: #7aa2ff; --accent-fg: #141312; --warn: #ff7a70; color-scheme: dark; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 16px/1.6 "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", sans-serif; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
+.app { max-width: 560px; margin: 0 auto; padding: 12px 16px 24px; display: flex; flex-direction: column; gap: 10px; }
+header { display: flex; justify-content: space-between; align-items: baseline; }
+h1 { margin: 0; font-size: 24px; }
+.stat { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--muted); }
+.now { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.now b { font-size: 28px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.now span { color: var(--muted); font-size: 14px; text-align: right; }
+.stage { position: relative; }
+canvas { display: block; width: 100%; border-radius: 14px; }
+.hold { width: 100%; font: inherit; font-weight: 800; font-size: 19px; padding: 18px 0; border-radius: 16px; border: 2px solid var(--accent); background: var(--accent); color: var(--accent-fg); cursor: pointer; }
+.hold:disabled { opacity: .5; }
+.cue { min-height: 1.6em; text-align: center; font-weight: 700; }
+.cue.bad { color: var(--warn); }
+.panel { background: var(--surface); border: 2px solid var(--fg); border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 12px; text-align: center; box-shadow: 4px 4px 0 var(--fg); }
+.panel h2 { margin: 0; font-size: 26px; }
+.panel p { margin: 0; }
+.lead { color: var(--muted); font-size: 15px; }
+.btn { font: inherit; font-weight: 800; border-radius: 12px; padding: 14px; border: 2px solid var(--fg); background: var(--surface); color: var(--fg); cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-size: 18px; }
+.btn.dark { background: var(--fg); color: var(--bg); }
+.row { display: flex; gap: 8px; } .row .btn { flex: 1; }
+.big { font-size: 40px; font-weight: 800; line-height: 1.15; }
+.small { font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header><h1>ドミノは1.5倍</h1><span class="stat" id="count"></span></header>
+
+  <section class="panel" id="intro">
+    <h2>5mmのドミノで、どこまで倒せる？</h2>
+    <p class="lead">ドミノは、自分の<b>約1.5倍</b>の大きさのドミノまで倒せます（1983年、物理学者ローン・ホワイトヘッドの実験）。<br>だから1.5倍ずつ大きくしていけば、30枚で……</p>
+    <p class="lead">ボタンを押しているあいだ、次のドミノの大きさが変わります。<b>赤い線をこえると倒れない</b>。線のぎりぎりではなすほど大きくなる。</p>
+    <button class="btn primary" id="start">1枚目を置く</button>
+  </section>
+
+  <section id="game" hidden style="display:flex;flex-direction:column;gap:10px">
+    <div class="now"><b id="height">5.0 mm</b><span id="cmp"></span></div>
+    <div class="stage"><canvas id="cv" aria-label="ドミノの列"></canvas></div>
+    <div class="cue" id="cue"></div>
+    <button class="hold" id="hold">押して大きさを決める</button>
+  </section>
+
+  <section class="panel" id="result" hidden>
+    <p class="small" id="rHow"></p>
+    <div class="big" id="rHeight"></div>
+    <p style="font-weight:800" id="rCmp"></p>
+    <p class="lead" id="rNote"></p>
+    <div class="row"><button class="btn dark" id="share">結果をXに投稿</button><button class="btn primary" id="again">もう一回</button></div>
+    <p class="small" id="rBest"></p>
+  </section>
+</div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const cv = $("cv"), ctx = cv.getContext("2d");
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const N = 30, H0 = 0.005;
+// heights in metres
+const LANDMARKS = [
+  [0.024, "消しゴム"], [0.15, "スマホ"], [0.21, "ペットボトル"], [0.75, "机"], [1.7, "大人"], [3.5, "キリン"], [10, "3階建ての家"], [15, "奈良の大仏"],
+  [93, "自由の女神（台座こみ）"], [333, "東京タワー"], [634, "東京スカイツリー"], [828, "ブルジュ・ハリファ"], [3776, "富士山"],
+];
+function fmtLen(m) {
+  if (m < 0.01) return (m * 1000).toFixed(1) + " mm";
+  if (m < 1) return (m * 100).toFixed(1) + " cm";
+  if (m < 1000) return m.toFixed(m < 10 ? 2 : m < 100 ? 1 : 0) + " m";
+  return (m / 1000).toFixed(2) + " km";
+}
+function passed(h) { let p = null; for (const l of LANDMARKS) if (h >= l[0]) p = l; return p; }
+function nextMark(h) { return LANDMARKS.find((l) => l[0] > h); }
+
+let W = 0, Hc = 0, DPR = 1;
+function resize() { DPR = Math.min(2, devicePixelRatio || 1); W = cv.clientWidth; Hc = Math.round(clamp(W * 0.75, 260, 420)); cv.width = W * DPR; cv.height = Hc * DPR; cv.style.height = Hc + "px"; ctx.setTransform(DPR, 0, 0, DPR, 0, 0); }
+addEventListener("resize", resize);
+
+// ---------- state ----------
+let dom = [];         // {h, x, t, ang, target}
+let state = "intro";  // intro | aim | hold | fall | over
+let ratio = 1, phase = 0, limit = 1.5, holdT = 0, cam = 1, camX = 0, endMsg = "", perfect = 0, best = 0, failed = false;
+try { best = +localStorage.getItem("domino.best") || 0; } catch (e) {}
+
+function newGame() {
+  dom = [{ h: H0, x: 0, t: H0 * 0.16, ang: 0, target: 0 }];
+  perfect = 0; failed = false; endMsg = "";
+  $("intro").hidden = true; $("result").hidden = true; $("game").hidden = false;
+  resize();
+  cam = Hc * 0.42 / H0; camX = 0;
+  nextAim();
+}
+function nextAim() {
+  state = "aim"; ratio = 1; phase = 0;
+  // each domino has its own limit (shape, weight, how it is hit): about 1.5 on average
+  limit = +(1.4 + Math.random() * 0.22).toFixed(2);
+  $("hold").disabled = false;
+  $("hold").textContent = "押して " + (dom.length + 1) + " 枚目の大きさを決める";
+  $("cue").className = "cue";
+  $("cue").textContent = "この1枚が倒せるのは ×" + limit.toFixed(2) + " まで";
+  updateTop();
+}
+function updateTop() {
+  const last = dom[dom.length - 1];
+  const fallen = dom.length >= 2 ? dom[dom.length - 1].h : H0;
+  $("count").textContent = dom.length + " / " + N + " 枚";
+  $("height").textContent = fmtLen(last.h);
+  const p = passed(last.h), nx = nextMark(last.h);
+  $("cmp").textContent = (p ? p[1] + "より大きい" : "") + (nx ? (p ? "／" : "") + "次は" + nx[1] : "");
+}
+function speed() { return 0.55 + dom.length * 0.045; } // full sweeps per second
+
+function press() { if (state !== "aim") return; state = "hold"; holdT = 0; }
+function release() {
+  if (state !== "hold") return;
+  const prev = dom[dom.length - 1];
+  const r = ratio;
+  const h = prev.h * r;
+  const gap = prev.h * 0.55;
+  const d = { h, x: prev.x + prev.t + gap, t: h * 0.16, ang: 0, target: 0 };
+  dom.push(d);
+  // the previous domino falls against the new one
+  prev.target = Math.asin(clamp(gap / prev.h, 0, 1)) + 0.05;
+  const ok = r <= limit + 1e-9;
+  if (ok && limit - r < 0.025) perfect++;
+  state = "fall";
+  $("hold").disabled = true;
+  const cue = $("cue");
+  if (!ok) { failed = true; cue.className = "cue bad"; cue.textContent = "×" + r.toFixed(2) + "……大きすぎて倒れない！"; }
+  else { cue.className = "cue"; cue.textContent = "×" + r.toFixed(2) + (limit - r < 0.025 ? "　ぎりぎり！" : ""); }
+  setTimeout(() => {
+    if (!ok) return finish(dom.length - 2);
+    d.target = 0;
+    if (dom.length >= N) { d.target = Math.PI / 2 - 0.02; setTimeout(() => finish(dom.length - 1), 1200); state = "fall"; return; }
+    nextAim();
+  }, ok ? 650 : 1400);
+}
+function finish(lastFallenIdx) {
+  state = "over";
+  const top = dom[lastFallenIdx];
+  const n = lastFallenIdx + 1;
+  const h = top.h;
+  const p = passed(h), nx = nextMark(h);
+  const all = !failed && n >= N;
+  $("game").hidden = true; $("result").hidden = false;
+  $("rHow").textContent = all ? "30枚ぜんぶ倒した" : n + "枚目まで倒れて、" + (n + 1) + "枚目で止まった";
+  $("rHeight").textContent = "高さ " + fmtLen(h);
+  $("rCmp").textContent = (p ? p[1] + "より大きいドミノを倒した" : "") + (nx ? "（次は" + nx[1] + "）" : "");
+  $("rNote").textContent = "ぎりぎり成功 " + perfect + "回。毎回ちょうど1.5倍なら、30枚目は約 639 m（スカイツリーくらい）になる計算です。";
+  const prev = best;
+  if (h > best) { best = h; try { localStorage.setItem("domino.best", h); } catch (e) {} }
+  $("rBest").textContent = h > prev && prev ? "自己ベスト更新（前回 " + fmtLen(prev) + "）" : "自己ベスト " + fmtLen(best);
+  $("share").onclick = () => {
+    const text = "ドミノは1.5倍｜5mmのドミノから" + (all ? "30枚で" : n + "枚目まで倒して") + "、高さ" + fmtLen(h) + (p ? "（" + p[1] + "超え）" : "") + "のドミノを倒した\n#ドミノは1.5倍";
+    open("https://x.com/intent/post?text=" + encodeURIComponent(text) + "&url=" + encodeURIComponent(location.href.split("#")[0]), "_blank", "noopener");
+  };
+}
+
+// ---------- update & draw ----------
+function update(dt) {
+  if (state === "hold") {
+    holdT += dt;
+    // ping-pong between ×1.00 and ×2.00
+    phase += dt * speed() * 2;
+    const p = phase % 2; ratio = 1 + (p < 1 ? p : 2 - p);
+  }
+  dom.forEach((d) => { d.ang += (d.target - d.ang) * (1 - Math.exp(-dt / 0.12)); });
+  // camera follows the newest domino (or the one being sized)
+  const last = dom[dom.length - 1];
+  const focusH = state === "hold" ? last.h * ratio : last.h;
+  const wantScale = Hc * 0.42 / focusH;
+  cam = Math.exp(lerp(Math.log(cam), Math.log(wantScale), 1 - Math.exp(-dt / 0.35)));
+  const wantX = last.x + last.t;
+  camX = lerp(camX, wantX, 1 - Math.exp(-dt / 0.35));
+}
+function draw() {
+  ctx.fillStyle = "#cfe3f1"; ctx.fillRect(0, 0, W, Hc);
+  const gy = Hc * 0.86;
+  const sx = (x) => W * 0.36 + (x - camX) * cam;
+  // landmarks at real scale, lined up behind
+  const lastD = dom[dom.length - 1];
+  let lx = Math.max(W * 0.58, sx(lastD.x + lastD.t + lastD.h * 0.55) + lastD.h * (state === "hold" ? ratio : 1) * 0.16 * cam + 18);
+  LANDMARKS.forEach((l) => {
+    const h = l[0] * cam;
+    if (h < 6 || h > Hc * 1.4) return;
+    const w = Math.max(8, Math.min(h * 0.5, W * 0.2));
+    ctx.fillStyle = "#a9c3d6";
+    drawLandmark(l[1], lx + w / 2, gy, w, h);
+    ctx.fillStyle = "#4b6578"; ctx.font = "700 12px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText(l[1], lx + w / 2, Math.max(14, gy - h - 5));
+    lx += w + 16;
+  });
+  ctx.fillStyle = "#8a7a64"; ctx.fillRect(0, gy, W, Hc - gy);
+  ctx.fillStyle = "#6f604c"; ctx.fillRect(0, gy, W, 3);
+  // dominoes
+  dom.forEach((d, i) => {
+    const x = sx(d.x), w = Math.max(1, d.t * cam), h = d.h * cam;
+    if (x + w < -50 || x - h > W + 50) return;
+    ctx.save();
+    ctx.translate(x + w, gy); ctx.rotate(d.ang);
+    ctx.fillStyle = i % 2 ? "#1f1d1a" : "#2a5bd7";
+    ctx.fillRect(-w, -h, w, h);
+    if (w > 6) { ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(-w / 2, -h * 0.3, Math.min(w * 0.18, h * 0.05), 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.arc(-w / 2, -h * 0.7, Math.min(w * 0.18, h * 0.05), 0, Math.PI * 2); ctx.fill(); ctx.fillRect(-w * 0.85, -h * 0.505, w * 0.7, Math.max(1, h * 0.01)); }
+    ctx.restore();
+  });
+  // the domino being sized: an outline at the place it will stand
+  if (state === "hold" || state === "aim") {
+    const prev = dom[dom.length - 1];
+    const r = state === "hold" ? ratio : 1;
+    const h = prev.h * r, x = prev.x + prev.t + prev.h * 0.55;
+    const over = r > limit;
+    ctx.strokeStyle = over ? "#c8322b" : "#2a5bd7"; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+    ctx.strokeRect(sx(x), gy - h * cam, Math.max(2, h * 0.16 * cam), h * cam);
+    // the limit height
+    const lh = prev.h * limit * cam;
+    ctx.strokeStyle = "#c8322b"; ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.moveTo(sx(x) - 14, gy - lh); ctx.lineTo(sx(x) + h * 0.16 * cam + 14, gy - lh); ctx.stroke();
+    ctx.setLineDash([]);
+    drawGauge(r);
+  }
+}
+function drawGauge(r) {
+  const x = 14, top = 14, h = Hc * 0.62, w = 14;
+  const yOf = (v) => top + h - (v - 1) * h;
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(x, top, w, h);
+  ctx.fillStyle = "#f2c9c6"; ctx.fillRect(x, top, w, yOf(limit) - top);
+  ctx.fillStyle = "#c8322b"; ctx.fillRect(x - 4, yOf(limit) - 1, w + 8, 3);
+  ctx.strokeStyle = "#1f1d1a"; ctx.lineWidth = 2; ctx.strokeRect(x, top, w, h);
+  ctx.fillStyle = r > limit ? "#c8322b" : "#2a5bd7";
+  ctx.fillRect(x, yOf(r), w, top + h - yOf(r));
+  ctx.fillStyle = "#1f1d1a"; ctx.font = "800 14px sans-serif"; ctx.textAlign = "left";
+  ctx.fillText("×" + r.toFixed(2), x + w + 8, yOf(r) + 5);
+  ctx.font = "700 11px sans-serif"; ctx.fillStyle = "#c8322b"; ctx.fillText("限界 ×" + limit.toFixed(2), x + w + 8, yOf(limit) - 6);
+}
+function drawLandmark(name, x, gy, w, h) {
+  if (/大人/.test(name)) { ctx.beginPath(); ctx.arc(x, gy - h + w * 0.22, w * 0.22, 0, Math.PI * 2); ctx.fill(); ctx.fillRect(x - w * 0.25, gy - h + w * 0.45, w * 0.5, h - w * 0.45); }
+  else if (/キリン/.test(name)) { ctx.fillRect(x - w * 0.4, gy - h * 0.55, w * 0.8, h * 0.25); ctx.fillRect(x + w * 0.2, gy - h, w * 0.18, h * 0.5); ctx.fillRect(x - w * 0.35, gy - h * 0.32, w * 0.1, h * 0.32); ctx.fillRect(x + w * 0.25, gy - h * 0.32, w * 0.1, h * 0.32); }
+  else if (/タワー|ツリー|ハリファ/.test(name)) { ctx.beginPath(); ctx.moveTo(x - w / 2, gy); ctx.lineTo(x - w * 0.05, gy - h); ctx.lineTo(x + w * 0.05, gy - h); ctx.lineTo(x + w / 2, gy); ctx.fill(); }
+  else if (/富士山/.test(name)) { ctx.beginPath(); ctx.moveTo(x - w * 2, gy); ctx.lineTo(x - w * 0.2, gy - h); ctx.lineTo(x + w * 0.2, gy - h); ctx.lineTo(x + w * 2, gy); ctx.fill(); }
+  else if (/家/.test(name)) { ctx.fillRect(x - w / 2, gy - h * 0.8, w, h * 0.8); ctx.beginPath(); ctx.moveTo(x - w * 0.6, gy - h * 0.8); ctx.lineTo(x, gy - h); ctx.lineTo(x + w * 0.6, gy - h * 0.8); ctx.fill(); }
+  else if (/大仏|女神/.test(name)) { ctx.beginPath(); ctx.arc(x, gy - h + w * 0.2, w * 0.2, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.moveTo(x - w / 2, gy); ctx.lineTo(x - w * 0.25, gy - h + w * 0.4); ctx.lineTo(x + w * 0.25, gy - h + w * 0.4); ctx.lineTo(x + w / 2, gy); ctx.fill(); }
+  else ctx.fillRect(x - w / 2, gy - h, w, h);
+}
+
+let last = 0;
+function loop(now) { const dt = Math.min(0.05, (now - (last || now)) / 1000); last = now; if (state !== "intro" && state !== "over") { update(dt); draw(); } requestAnimationFrame(loop); }
+
+// ---------- input ----------
+const hold = $("hold");
+hold.addEventListener("pointerdown", (e) => { e.preventDefault(); press(); });
+hold.addEventListener("pointerup", release);
+hold.addEventListener("pointercancel", release);
+hold.addEventListener("pointerleave", release);
+hold.addEventListener("contextmenu", (e) => e.preventDefault());
+addEventListener("keydown", (e) => { if (e.code === "Space" && !e.repeat) { e.preventDefault(); press(); } });
+addEventListener("keyup", (e) => { if (e.code === "Space") release(); });
+$("start").addEventListener("click", newGame);
+$("again").addEventListener("click", newGame);
+resize();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
